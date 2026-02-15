@@ -7,6 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from backend.app.hardware import shutdown_all
+from backend.app.routes import camera, stage, laser, scan
+
 logger = logging.getLogger(__name__)
 
 # 프로젝트 루트 경로 (main.py 기준)
@@ -21,6 +24,7 @@ async def lifespan(app: FastAPI):
     logger.info("API docs: http://localhost:8000/docs")
     yield
     # shutdown
+    shutdown_all()
     logger.info("Server stopped")
 
 
@@ -40,9 +44,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API 라우터 등록 (나중에 추가)
-# from backend.app.api import users
-# app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+# API 라우터 등록
+app.include_router(camera.router, prefix="/api/camera", tags=["Camera"])
+app.include_router(stage.router, prefix="/api/stage", tags=["Stage"])
+app.include_router(laser.router, prefix="/api/laser", tags=["Laser"])
+app.include_router(scan.router, prefix="/api/scan", tags=["Scan & AI"])
 
 
 @app.get("/api/health")
@@ -51,6 +57,7 @@ def health_check():
 
 
 # React 정적 파일 서빙 (빌드 후 활성화)
+# catch-all은 반드시 라우터 등록 이후에 위치해야 함
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
