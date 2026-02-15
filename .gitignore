@@ -1,0 +1,96 @@
+# 환경변수
+.env
+.env.local
+.env.*.local
+
+# Python 가상환경
+venv/
+env/
+ENV/
+.venv
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# PyCharm
+.idea/
+
+# VSCode
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# AI/ML 모델 파일
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.onnx
+*.pb
+*.tflite
+*.ckpt
+checkpoints/
+models/
+weights/
+*.safetensors
+
+# 데이터셋 (필요시)
+data/
+dataset/
+*.csv
+*.tsv
+
+# 로그 파일
+*.log
+logs/
+
+# 데이터베이스
+*.db
+*.sqlite
+*.sqlite3
+
+# OS 파일
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# React (frontend 폴더)
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.pnp
+frontend/.pnp.js
+frontend/coverage/
+
+# React 환경변수
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# React 로그
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# FastAPI 빌드된 React 파일 (선택사항)
+# static/  # 빌드 파일을 Git에 포함하려면 주석 유지
+
+# 테스트 커버리지
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 임시 파일
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
