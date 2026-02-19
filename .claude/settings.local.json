@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/seoja/Desktop/RamanGPT/backend/venv/Scripts/python.exe -m pip install:*)",
+      "Bash(/c/Users/seoja/Desktop/RamanGPT/backend/venv/Scripts/python.exe:*)"
+    ]
+  }
+}

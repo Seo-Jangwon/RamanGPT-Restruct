@@ -99,3 +99,22 @@ class SAM3SegmentResponse(BaseModel):
     total_objects: int
     objects: List[dict]
     visualization_path: str
+
+
+# ── Autofocus ──
+
+class AutofocusRequest(BaseModel):
+    z_min: float = Field(default=0.0, description="Z축 탐색 최소값 (um)")
+    z_max: float = Field(default=1000.0, description="Z축 탐색 최대값 (um)")
+    target_description: str = Field(default="세포, 세포벽", description="Gemini 검증용 타겟 설명")
+    coarse_step: float = Field(default=50.0, ge=1.0, description="Coarse scan 스텝 (um)")
+    fine_tolerance: float = Field(default=1.0, ge=0.1, description="Fine focus 수렴 허용치 (um)")
+
+
+class AutofocusResponse(BaseModel):
+    status: str
+    optimal_z: Optional[float] = None
+    best_score: Optional[float] = None
+    coarse_samples: Optional[int] = None
+    fine_iterations: Optional[int] = None
+    reason: Optional[str] = None
