@@ -45,6 +45,8 @@ class AutoFocusAgent:
         self.camera = camera
         self.stage = stage
         self.history: List[Dict] = []
+        self._home_x = 0.0
+        self._home_y = 0.0
 
         # Gemini 설정
         self._gemini_client = None
@@ -63,8 +65,8 @@ class AutoFocusAgent:
     # ================================================================
 
     def _move_z(self, z: float):
-        """Z축 절대 이동 (X=0, Y=0 고정)"""
-        self.stage.move_absolute(0.0, 0.0, z)
+        """Z축 절대 이동 (X, Y는 run() 시작 시점의 위치 유지)"""
+        self.stage.move_absolute(self._home_x, self._home_y, z)
 
     def _capture_frame(self) -> Optional[np.ndarray]:
         return self.camera.get_latest_frame()
@@ -252,25 +254,38 @@ class AutoFocusAgent:
         Returns:
             (z_min, z_max) 유효 구간 또는 None
         """
-        for peak in peaks:
+        remaining = list(peaks)
+        i = 0
+        while i < len(remaining):
+            peak = remaining[i]
             z = peak["z"]
-            logger.info("Validating peak Z=%.1f (score=%.2f) ...", z, peak["score"])
+            logger.info("Validating peak Z=%.4f (score=%.2f) ...", z, peak["score"])
 
             self._move_z(z)
             time.sleep(0.1)
 
             frame = self._capture_frame()
             if frame is None:
+                i += 1
                 continue
 
             result = self.validate_with_gemini(frame, target_description)
 
             if result == "ok":
                 region = (z - search_margin, z + search_margin)
-                logger.info("Validated! Fine focus region: [%.1f, %.1f]", *region)
+                logger.info("Validated! Fine focus region: [%.4f, %.4f]", *region)
                 return region
 
-            logger.info("Rejected (gemini=%s), trying next peak", result)
+            # up/down 힌트로 남은 피크 재정렬
+            rest = remaining[i + 1 :]
+            if result == "up":
+                rest.sort(key=lambda p: p["z"], reverse=True)   # Z 높은 쪽 우선
+                logger.info("Gemini hint=up → remaining peaks sorted high-Z first")
+            elif result == "down":
+                rest.sort(key=lambda p: p["z"])                  # Z 낮은 쪽 우선
+                logger.info("Gemini hint=down → remaining peaks sorted low-Z first")
+            remaining[i + 1 :] = rest
+            i += 1
 
         logger.warning("No valid region found")
         return None
@@ -364,6 +379,12 @@ class AutoFocusAgent:
         self.history = []
         z_min, z_max = z_range
 
+        # run() 시작 시점의 X, Y 좌표 저장 → _move_z에서 재사용
+        pos = self.stage.get_position()
+        if pos is not None:
+            self._home_x, self._home_y = pos[0], pos[1]
+            logger.info("Home XY set: X=%.3f, Y=%.3f", self._home_x, self._home_y)
+
         logger.info("=" * 60)
         logger.info("AutoFocus Pipeline Started")
         logger.info("  Range : [%.1f, %.1f] um", z_min, z_max)
@@ -410,3 +431,123 @@ class AutoFocusAgent:
             "fine_iterations": result["iterations"],
             "history": self.history,
         }
+
+
+if __name__ == "__main__":
+    import sys
+    import time
+    from pathlib import Path
+
+    # 프로젝트 루트를 sys.path에 추가 (어디서 실행하든 import 가능하도록)
+    _root = Path(__file__).resolve().parent.parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s: %(message)s",
+    )
+
+    _DLL_PATH = str(Path(__file__).resolve().parent.parent / "util" / "stage_move" / "Tango_DLL.dll")
+
+    # 프로젝트 루트의 .env 파일에서 API 키 로드 (소스코드에 절대 하드코딩 금지)
+    from dotenv import load_dotenv
+    load_dotenv(_root / ".env")
+    _GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+    _GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    if _GEMINI_API_KEY:
+        print(f"  Gemini API 키 로드 완료 (.env) | 모델: {_GEMINI_MODEL}")
+    else:
+        print("  GEMINI_API_KEY 없음 → Gemini 검증 스킵 (.env 파일에 키를 입력하세요)")
+
+    # ── 1. 스테이지 연결 ──
+    print("[1/3] Tango 스테이지 연결 중...")
+    from backend.util.stage_move.stage_test import TangoController
+
+    _stage = TangoController(_DLL_PATH)
+    if not _stage.load_dll():
+        sys.exit("DLL 로드 실패")
+    if not _stage.create_session():
+        sys.exit("세션 생성 실패")
+    if not _stage.connect():
+        sys.exit("스테이지 연결 실패")
+
+    _pos = _stage.get_position()
+    _current_z = _pos[2]
+    print(f"  현재 위치: X={_pos[0]:.3f}, Y={_pos[1]:.3f}, Z={_current_z:.3f} mm")
+
+    # ── 2. 카메라 연결 ──
+    print("[2/3] 카메라 초기화 중...")
+    from backend.autofocus.autofocus import StreamingTUCam
+
+    _cam = StreamingTUCam(exposure_ms=10.0)
+    _cam.start_stream()
+    time.sleep(0.5)
+
+    _frame = _cam.get_latest_frame()
+    if _frame is None:
+        _cam.close()
+        _stage.disconnect()
+        _stage.free_session()
+        sys.exit("카메라 프레임 획득 실패")
+    print(f"  프레임 획득 OK: shape={_frame.shape}, dtype={_frame.dtype}")
+
+    # ── 3. AutoFocus 실행 (실시간 스트리밍 오버레이 포함) ──
+    print("[3/3] AutoFocus 시작... (창 이름: 'AutoFocus Live')")
+
+    from backend.autofocus.autofocus import show_live
+
+    class _LiveAutoFocusAgent(AutoFocusAgent):
+        """프레임 캡처마다 cv2 창에 실시간으로 띄워주는 서브클래스"""
+
+        def _capture_and_score(self):
+            frame, score = super()._capture_and_score()
+            if frame is not None:
+                phase = self.history[-1]["phase"] if self.history else "coarse"
+                show_live(frame, score, direction=phase, speed_mode="", index=len(self.history))
+            return frame, score
+
+    _agent = _LiveAutoFocusAgent(
+        camera=_cam,
+        stage=_stage,
+        gemini_api_key=_GEMINI_API_KEY,
+        gemini_model=_GEMINI_MODEL,
+    )
+
+    # Z 범위: 현재 위치 ±0.5 mm, 스텝 0.05 mm (TangoController 단위 = mm)
+    _Z_MIN = _current_z - 2.0
+    _Z_MAX = _current_z + 2.0
+
+    try:
+        _result = _agent.run(
+            z_range=(_Z_MIN, _Z_MAX),
+            target_description="눈금, 눈금자",
+            coarse_step=0.2,
+            fine_tolerance=0.001,
+            search_margin=0.3,   # coarse_step의 1.5배 수준 (단위: mm)
+        )
+
+        print("\n" + "=" * 60)
+        print("AutoFocus 결과")
+        print("=" * 60)
+        print(f"Status     : {_result['status']}")
+        if _result['status'] == 'ok':
+            print(f"Optimal Z  : {_result['optimal_z']:.4f} mm")
+            print(f"Best Score : {_result['best_score']:.2f}")
+            print(f"Coarse 횟수: {_result['coarse_samples']}")
+            print(f"Fine 반복  : {_result['fine_iterations']}")
+        else:
+            print(f"실패 이유  : {_result.get('reason')}")
+        print("=" * 60)
+
+        print("창을 닫으려면 아무 키나 누르세요...")
+        cv2.waitKey(0)
+
+    except KeyboardInterrupt:
+        print("\n중단됨 (Ctrl+C)")
+    finally:
+        cv2.destroyAllWindows()
+        _cam.close()
+        _stage.disconnect()
+        _stage.free_session()
+        print("정리 완료")

@@ -19,7 +19,7 @@ router = APIRouter()
 @router.post("/connect", response_model=StageStatus)
 async def stage_connect(req: StageConnectRequest):
     try:
-        await connect_stage(dll_path=req.dll_path)
+        await connect_stage(dll_path=req.dll_path or None)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

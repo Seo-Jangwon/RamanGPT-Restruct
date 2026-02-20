@@ -10,9 +10,13 @@ import asyncio
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# DLL 기본 경로 (backend/util/stage_move/Tango_DLL.dll)
+_DEFAULT_DLL_PATH = str(Path(__file__).resolve().parent.parent / "util" / "stage_move" / "Tango_DLL.dll")
 
 # ── 글로벌 인스턴스 (None = 미연결) ──
 _camera = None  # StreamingTUCam
@@ -75,8 +79,10 @@ async def disconnect_camera():
 
 # ── Stage ──
 
-async def connect_stage(dll_path: str = "./Tango_DLL.dll"):
+async def connect_stage(dll_path: str = None):
     global _stage
+    if not dll_path:
+        dll_path = _DEFAULT_DLL_PATH
     with _stage_lock:
         if _stage is not None:
             raise RuntimeError("Stage already connected")

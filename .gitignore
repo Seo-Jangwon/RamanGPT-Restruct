@@ -94,3 +94,8 @@ htmlcov/
 *.swp
 *.swo
 *~
+
+*MIchrome 6_*
+*claude*
+.claude/settings.local.json
+.claude*.claude/settings.local.json

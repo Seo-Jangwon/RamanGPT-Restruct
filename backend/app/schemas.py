@@ -32,7 +32,7 @@ class FocusScoreResponse(BaseModel):
 # ── Stage ──
 
 class StageConnectRequest(BaseModel):
-    dll_path: str = Field(default="./Tango_DLL.dll")
+    dll_path: str = Field(default="")
 
 
 class StagePosition(BaseModel):
