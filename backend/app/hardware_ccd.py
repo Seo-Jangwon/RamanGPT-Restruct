@@ -2,7 +2,7 @@
 Andor CCD 싱글톤 매니저
 
 startup : connect → cooler ON → set temp -40°C
-shutdown : set temp -5°C → wait (max 30s) → ShutDown
+shutdown : cooler OFF → wait temp >= -20°C (max 1200s) → ShutDown
 
 HW_andor_camera-master 폴더명에 하이픈이 있어 직접 import 불가.
 sys.path 에 해당 디렉토리를 추가한 뒤 importlib 로 로드.
@@ -26,6 +26,7 @@ _ANDOR_DIR = Path(__file__).resolve().parent.parent.parent / "HW_andor_camera-ma
 # ── 글로벌 인스턴스 ──
 _ccd = None
 _ccd_lock = threading.Lock()
+_ccd_init_in_progress = False          # TOCTOU 방지: 초기화 중 플래그
 ccd_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ccd")
 
 
@@ -62,42 +63,54 @@ def get_ccd():
 
 async def connect_ccd(target_temp: int = -40) -> None:
     """
-    CCD 연결 → 쿨러 ON → 온도 목표 설정 (-40°C).
+    CCD 연결 → 쿨러 ON → 온도 목표 설정.
     온도 안정화는 비동기로 진행되므로 즉시 반환.
     """
-    global _ccd
-    with _ccd_lock:
-        if _ccd is not None:
-            raise RuntimeError("CCD already connected")
-
-    loop = asyncio.get_running_loop()
-
-    def _init() -> object:
-        mod = _load_andor_interface()
-        ccd = mod.AndorCCD(initialize_to_defaults=False)
-        ccd.set_cooler(True)
-        ccd.set_temperature(target_temp)
-        logger.info("CCD initialized, cooler ON, target temp=%d°C", target_temp)
-        return ccd
-
-    ccd = await loop.run_in_executor(ccd_executor, _init)
+    global _ccd, _ccd_init_in_progress
 
     with _ccd_lock:
-        _ccd = ccd
-    logger.info("CCD connected")
+        if _ccd is not None or _ccd_init_in_progress:
+            raise RuntimeError("CCD already connected or connecting")
+        _ccd_init_in_progress = True
+
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _init() -> object:
+            mod = _load_andor_interface()
+            ccd = mod.AndorCCD(initialize_to_defaults=False)
+            ccd.set_cooler(True)
+            ccd.set_temperature(target_temp)
+            logger.info("CCD initialized, cooler ON, target temp=%d°C", target_temp)
+            return ccd
+
+        ccd = await loop.run_in_executor(ccd_executor, _init)
+
+        with _ccd_lock:
+            _ccd = ccd
+            _ccd_init_in_progress = False
+        logger.info("CCD connected")
+
+    except Exception:
+        with _ccd_lock:
+            _ccd_init_in_progress = False
+        raise
 
 
-async def disconnect_ccd(warmup_temp: int = -5, max_wait_sec: int = 30) -> None:
+async def disconnect_ccd(warmup_temp: int = -20, max_wait_sec: int = 1200) -> None:
     """
     CCD 안전 종료:
-      1) 온도 목표를 warmup_temp(-5°C) 로 설정 (열충격 방지)
-      2) max_wait_sec 초 동안 온도 상승 대기
+      1) 쿨러 OFF  — TEC 냉각 중단, 자연 승온 시작
+      2) 온도가 warmup_temp(-20°C) 이상 오를 때까지 대기 (최대 max_wait_sec초)
       3) ShutDown
+
+    Andor 권장: ShutDown 전 검출기를 -20°C 이상으로 승온.
+    warmup_temp=-20°C, max_wait_sec=1200(20분) 이 기본값.
     """
     global _ccd
     with _ccd_lock:
         ccd = _ccd
-        _ccd = None
+        _ccd = None         # 즉시 None으로 → 이후 요청은 연결 안 됨으로 처리
 
     if ccd is None:
         return
@@ -105,23 +118,37 @@ async def disconnect_ccd(warmup_temp: int = -5, max_wait_sec: int = 30) -> None:
     loop = asyncio.get_running_loop()
 
     def _warmup_and_close() -> None:
+        # 1) 쿨러 OFF — 능동 냉각 중단, 자연 승온 시작
         try:
-            ccd.set_temperature(warmup_temp)
-            logger.info("CCD warmup: target=%d°C, waiting up to %ds", warmup_temp, max_wait_sec)
+            ccd.set_cooler_off()
+            logger.info("CCD cooler OFF")
         except Exception as e:
-            logger.warning("CCD set_temperature error during shutdown: %s", e)
+            logger.warning("CCD set_cooler_off error: %s", e)
 
+        # 2) 온도 상승 대기
+        logger.info(
+            "CCD warmup: waiting for temp >= %d°C (max %ds, poll 10s)",
+            warmup_temp, max_wait_sec,
+        )
         deadline = time.monotonic() + max_wait_sec
         while time.monotonic() < deadline:
             try:
                 temp = ccd.get_temperature()
-                logger.info("CCD warmup temp=%d°C", temp)
+                logger.info("CCD warmup temp=%d°C (target >= %d°C)", temp, warmup_temp)
                 if temp >= warmup_temp:
+                    logger.info("CCD warmup target reached (%d°C)", temp)
                     break
-            except Exception:
+            except Exception as e:
+                logger.warning("CCD get_temperature error during warmup: %s", e)
                 break
-            time.sleep(5)
+            time.sleep(10)
+        else:
+            logger.warning(
+                "CCD warmup timeout after %ds — proceeding with ShutDown anyway",
+                max_wait_sec,
+            )
 
+        # 3) ShutDown
         try:
             ccd.close()
             logger.info("CCD ShutDown complete")
@@ -131,8 +158,11 @@ async def disconnect_ccd(warmup_temp: int = -5, max_wait_sec: int = 30) -> None:
     await loop.run_in_executor(ccd_executor, _warmup_and_close)
 
 
-def shutdown_ccd_sync(warmup_temp: int = -5) -> None:
-    """동기 강제 종료 — lifespan 외 비상 상황에서만 사용."""
+def shutdown_ccd_sync(warmup_temp: int = -20) -> None:
+    """
+    동기 강제 종료 — lifespan 외 비상 상황에서만 사용.
+    쿨러 OFF 후 최대 30초 대기 뒤 ShutDown.
+    """
     global _ccd
     with _ccd_lock:
         ccd = _ccd
@@ -141,10 +171,23 @@ def shutdown_ccd_sync(warmup_temp: int = -5) -> None:
     if ccd is None:
         return
 
+    # 쿨러 OFF
     try:
-        ccd.set_temperature(warmup_temp)
+        ccd.set_cooler_off()
+        logger.info("CCD cooler OFF (sync shutdown)")
     except Exception as e:
-        logger.warning("CCD temp set error: %s", e)
+        logger.warning("CCD cooler_off error: %s", e)
+
+    # 짧게 온도 확인 (비상 종료이므로 최대 30초)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            temp = ccd.get_temperature()
+            if temp >= warmup_temp:
+                break
+        except Exception:
+            break
+        time.sleep(5)
 
     try:
         ccd.close()
@@ -156,21 +199,18 @@ def shutdown_ccd_sync(warmup_temp: int = -5) -> None:
 
 # ── 상태 조회 헬퍼 ──
 
-def read_ccd_temperature() -> Optional[int]:
+def read_ccd_temp_and_status() -> tuple:
+    """
+    온도와 안정화 상태를 단일 SDK 호출로 읽어 (temperature, temp_status) 튜플 반환.
+    get_temperature_status() 내부에서 get_temperature()를 호출하므로
+    SDK DLL 락 획득은 1회만 발생.
+    """
     ccd = get_ccd()
     if ccd is None:
-        return None
+        return None, None
     try:
-        return ccd.get_temperature()
+        status = ccd.get_temperature_status()   # 내부에서 get_temperature() 호출
+        temp = ccd.temperature                  # 위 호출로 캐시된 값
+        return temp, status
     except Exception:
-        return None
-
-
-def read_ccd_temp_status() -> Optional[str]:
-    ccd = get_ccd()
-    if ccd is None:
-        return None
-    try:
-        return ccd.get_temperature_status()
-    except Exception:
-        return None
+        return None, None

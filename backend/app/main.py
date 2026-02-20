@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     yield
     # shutdown
     try:
-        await disconnect_ccd(warmup_temp=-5, max_wait_sec=30)
+        await disconnect_ccd(warmup_temp=-20, max_wait_sec=1200)
     except Exception as e:
         logger.warning("CCD shutdown error: %s", e)
     shutdown_all()

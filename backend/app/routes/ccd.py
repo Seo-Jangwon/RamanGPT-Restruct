@@ -6,8 +6,7 @@ from backend.app.hardware_ccd import (
     get_ccd,
     connect_ccd,
     disconnect_ccd,
-    read_ccd_temperature,
-    read_ccd_temp_status,
+    read_ccd_temp_and_status,
     ccd_executor,
 )
 from backend.app.schemas import (
@@ -24,21 +23,17 @@ router = APIRouter()
 async def ccd_connect(req: CCDConnectRequest):
     # 이미 연결된 경우 현재 상태를 그대로 반환 (idempotent)
     if get_ccd() is not None:
-        return CCDStatus(
-            connected=True,
-            temperature=read_ccd_temperature(),
-            temp_status=read_ccd_temp_status(),
-        )
+        loop = asyncio.get_running_loop()
+        temp, status = await loop.run_in_executor(ccd_executor, read_ccd_temp_and_status)
+        return CCDStatus(connected=True, temperature=temp, temp_status=status)
     try:
         await connect_ccd(target_temp=req.target_temp)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return CCDStatus(
-        connected=True,
-        temperature=read_ccd_temperature(),
-        temp_status=read_ccd_temp_status(),
-    )
+    loop = asyncio.get_running_loop()
+    temp, status = await loop.run_in_executor(ccd_executor, read_ccd_temp_and_status)
+    return CCDStatus(connected=True, temperature=temp, temp_status=status)
 
 
 @router.post("/disconnect", response_model=StatusResponse)
@@ -53,11 +48,9 @@ async def ccd_disconnect():
 async def ccd_status():
     if get_ccd() is None:
         return CCDStatus(connected=False)
-    return CCDStatus(
-        connected=True,
-        temperature=read_ccd_temperature(),
-        temp_status=read_ccd_temp_status(),
-    )
+    loop = asyncio.get_running_loop()
+    temp, status = await loop.run_in_executor(ccd_executor, read_ccd_temp_and_status)
+    return CCDStatus(connected=True, temperature=temp, temp_status=status)
 
 
 @router.post("/temperature", response_model=StatusResponse)

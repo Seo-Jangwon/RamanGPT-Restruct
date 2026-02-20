@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar'
 import MainContent from './components/MainContent'
 import Banner from './components/Banner'
 import SystemInitModal from './components/SystemInitModal'
+import CCDStatusBar from './components/CCDStatusBar'
 
 export type PageId =
   | 'home'
@@ -33,39 +34,45 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Skip to content link for accessibility */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-raman-500 focus:text-white focus:rounded"
-      >
-        Skip to content
-      </a>
+    <div className="flex flex-col h-screen overflow-hidden">
+      {/* CCD 실시간 온도 상태 바 — 항상 최상단 */}
+      <CCDStatusBar />
 
-      {/* Sidebar - Always visible but subtle for AFM pages */}
-      <Sidebar
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        onPageSelect={(id) => setActivePage(id)}
-      />
+      {/* 메인 레이아웃 */}
+      <div className="flex flex-1 overflow-hidden min-h-0">
+        {/* Skip to content link for accessibility */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-raman-500 focus:text-white focus:rounded"
+        >
+          Skip to content
+        </a>
 
-      {/* Main content area */}
-      <main
-        id="main-content"
-        className="flex-1 flex flex-col overflow-hidden"
-      >
-        <MainContent
-          onMenuClick={() => setSidebarOpen(!sidebarOpen)}
-          sidebarOpen={shouldShowSidebar}
-          activePage={activePage}
-          onPageSelect={setActivePage}
+        {/* Sidebar */}
+        <Sidebar
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          onPageSelect={(id) => setActivePage(id)}
         />
-      </main>
 
-      {/* Bottom banner - Hidden for AFM pages */}
-      {bannerVisible && !isAFMPage && (
-        <Banner onDismiss={() => setBannerVisible(false)} />
-      )}
+        {/* Main content area */}
+        <main
+          id="main-content"
+          className="flex-1 flex flex-col overflow-hidden"
+        >
+          <MainContent
+            onMenuClick={() => setSidebarOpen(!sidebarOpen)}
+            sidebarOpen={shouldShowSidebar}
+            activePage={activePage}
+            onPageSelect={setActivePage}
+          />
+        </main>
+
+        {/* Bottom banner - Hidden for AFM pages */}
+        {bannerVisible && !isAFMPage && (
+          <Banner onDismiss={() => setBannerVisible(false)} />
+        )}
+      </div>
     </div>
   )
 }
