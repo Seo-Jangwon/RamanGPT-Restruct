@@ -8,7 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from backend.app.hardware import shutdown_all
-from backend.app.routes import camera, stage, laser, scan
+from backend.app.hardware_ccd import connect_ccd, disconnect_ccd
+from backend.app.routes import camera, stage, laser, scan, ccd
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,17 @@ async def lifespan(app: FastAPI):
     # startup
     logger.info("Server started")
     logger.info("API docs: http://localhost:8000/docs")
+    try:
+        await connect_ccd(target_temp=-40)
+        logger.info("CCD startup: target temp -40°C set")
+    except Exception as e:
+        logger.warning("CCD startup failed (continuing without CCD): %s", e)
     yield
     # shutdown
+    try:
+        await disconnect_ccd(warmup_temp=-5, max_wait_sec=30)
+    except Exception as e:
+        logger.warning("CCD shutdown error: %s", e)
     shutdown_all()
     logger.info("Server stopped")
 
@@ -49,6 +59,7 @@ app.include_router(camera.router, prefix="/api/camera", tags=["Camera"])
 app.include_router(stage.router, prefix="/api/stage", tags=["Stage"])
 app.include_router(laser.router, prefix="/api/laser", tags=["Laser"])
 app.include_router(scan.router, prefix="/api/scan", tags=["Scan & AI"])
+app.include_router(ccd.router, prefix="/api/ccd", tags=["CCD"])
 
 
 @app.get("/api/health")

@@ -101,6 +101,22 @@ class SAM3SegmentResponse(BaseModel):
     visualization_path: str
 
 
+# ── CCD ──
+
+class CCDConnectRequest(BaseModel):
+    target_temp: int = Field(default=-40, ge=-100, le=30, description="초기 목표 온도 (°C)")
+
+
+class CCDTemperatureRequest(BaseModel):
+    temperature: int = Field(ge=-100, le=30, description="목표 온도 (°C)")
+
+
+class CCDStatus(BaseModel):
+    connected: bool
+    temperature: Optional[int] = None
+    temp_status: Optional[str] = None
+
+
 # ── Autofocus ──
 
 class AutofocusRequest(BaseModel):
